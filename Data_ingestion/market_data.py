@@ -1,297 +1,313 @@
+# ==============================================================================
+# IMPORTS & SETUP
+# ==============================================================================
 import pandas as pd
-import matplotlib.pyplot as plt
-from datetime import timedelta
-import os
 import time
-
-# --- Third-party libraries ---
 from polygon import RESTClient
-from googleapiclient.discovery import build
-from google.oauth2 import service_account
+import os
 from dotenv import load_dotenv
+from Classification import classify_market   # ✅ import classification rules
 
-# ==============================================================================
-# SETUP: API Keys and Service Initialization
-# ==============================================================================
-
-# Load environment variables from .env file
+# Load API key
 load_dotenv()
 POLYGON_API_KEY = os.getenv("POLYGON_API_KEY")
+client = RESTClient(api_key=POLYGON_API_KEY)
 
-# --- Initialize Polygon.io Client ---
-try:
-    if not POLYGON_API_KEY:
-        raise ValueError("POLYGON_API_KEY not found in .env file.")
-    client = RESTClient(api_key=POLYGON_API_KEY)
-    print("✅ Polygon.io client initialized.")
-except Exception as e:
-    print(f"❌ Failed to initialize Polygon client: {e}")
-    exit()
 
-#=========================================================
+# ==============================================================================
 # DATA FETCHING HELPER (Polygon.io)
 # ==============================================================================
-
 def _get_polygon_data(ticker, start_date, end_date, timespan="day", multiplier=1):
-    """Fetch OHLCV data from Polygon.io and normalize into a DataFrame.
+    """Fetch OHLCV data from Polygon.io and normalize into a DataFrame."""
+    try:
+        aggs = client.get_aggs(
+            ticker=ticker,
+            multiplier=multiplier,
+            timespan=timespan,
+            from_=start_date,
+            to=end_date,
+            limit=50000
+        )
 
-    Handles both SDK return shapes (object with .results or list of dict/model),
-    and is resilient to minor API changes. Returns a DataFrame indexed by timestamp
-    with columns: Open, High, Low, Close, Volume. Returns empty DataFrame on failure.
-    """
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            aggs = client.get_aggs(
-                ticker=ticker,
-                multiplier=multiplier,
-                timespan=timespan,
-                from_=start_date,
-                to=end_date,
-                limit=50000
-            )
+        # Normalize Polygon return types
+        if hasattr(aggs, "results"):
+            results = aggs.results or []
+        elif isinstance(aggs, (list, tuple)):
+            results = list(aggs)
+        elif aggs is None:
+            results = []
+        else:
+            results = [aggs]
 
-            # Extract results regardless of SDK version/shape
-            results = getattr(aggs, "results", aggs)
-
-            # If the SDK returns a generator, listify it
-            if results is None:
-                results = []
-            if not isinstance(results, (list, tuple)):
-                try:
-                    results = list(results)
-                except Exception:
-                    # Unknown shape
-                    results = []
-
-            if len(results) == 0:
-                print(f"Warning: No data returned for {ticker} from {start_date} to {end_date}.")
-                return pd.DataFrame()
-
-            # Convert model objects to dicts if needed
-            normalized = []
-            for item in results:
-                if isinstance(item, dict):
-                    normalized.append(item)
-                else:
-                    # Handle Agg objects from Polygon SDK
-                    try:
-                        # Extract attributes directly from the Agg object
-                        item_dict = {
-                            "t": getattr(item, "timestamp", None),
-                            "o": getattr(item, "open", None),
-                            "h": getattr(item, "high", None),
-                            "l": getattr(item, "low", None),
-                            "c": getattr(item, "close", None),
-                            "v": getattr(item, "volume", None)
-                        }
-                        # Only add if we have the essential data
-                        if item_dict["t"] is not None and item_dict["c"] is not None:
-                            normalized.append(item_dict)
-                    except Exception as e:
-                        print(f"Warning: Could not parse item: {e}")
-                        continue
-
-            if len(normalized) == 0:
-                print(f"Warning: Unable to parse data for {ticker}.")
-                return pd.DataFrame()
-
-            df = pd.DataFrame(normalized)
-
-            # Determine timestamp column name
-            ts_col = None
-            for key in ("t", "timestamp", "T", "time"):
-                if key in df.columns:
-                    ts_col = key
-                    break
-            if ts_col is None:
-                print("Warning: No timestamp column found in results.")
-                return pd.DataFrame()
-
-            # Convert timestamp; Polygon returns ms since epoch in 't' for aggs
-            try:
-                df['timestamp'] = pd.to_datetime(df[ts_col], unit='ms', errors='coerce')
-            except Exception:
-                df['timestamp'] = pd.to_datetime(df[ts_col], errors='coerce')
-            df = df.dropna(subset=['timestamp']).set_index('timestamp').sort_index()
-
-            # Rename price/volume columns to a consistent schema
-            rename_map = {"o": "Open", "h": "High", "l": "Low", "c": "Close", "v": "Volume"}
-            df = df.rename(columns=rename_map)
-
-            # Ensure required columns exist
-            required_cols = ["Open", "High", "Low", "Close", "Volume"]
-            missing = [col for col in required_cols if col not in df.columns]
-            if missing:
-                print(f"Warning: Missing expected columns: {missing}")
-                # Keep only what we have; return empty if core columns missing
-                if {"Close", "Volume"}.difference(df.columns):
-                    return pd.DataFrame()
-                # Fill missing with NaN if non-core
-                for col in missing:
-                    df[col] = pd.NA
-
-            return df[required_cols]
-
-        except Exception as e:
-            # Handle rate limiting with simple backoff
-            err_msg = str(e)
-            if "429" in err_msg or "Too Many Requests" in err_msg:
-                wait_s = 2 ** attempt
-                print(f"Rate limited by API (attempt {attempt+1}/{max_retries}). Waiting {wait_s}s...")
-                time.sleep(wait_s)
-                continue
-            print(f"Error fetching data for {ticker}: {e}")
+        if not results:
+            print(f"⚠️ No data returned for {ticker}.")
             return pd.DataFrame()
 
-    # If we exhausted retries
-    return pd.DataFrame()
+        rows = []
+        for item in results:
+            if isinstance(item, dict):
+                t, o, h, l, c, v = item.get("t"), item.get("o"), item.get("h"), item.get("l"), item.get("c"), item.get("v")
+            else:
+                t = getattr(item, "t", None) or getattr(item, "timestamp", None)
+                o = getattr(item, "o", None) or getattr(item, "open", None)
+                h = getattr(item, "h", None) or getattr(item, "high", None)
+                l = getattr(item, "l", None) or getattr(item, "low", None)
+                c = getattr(item, "c", None) or getattr(item, "close", None)
+                v = getattr(item, "v", None) or getattr(item, "volume", None)
+
+            if t is None:
+                continue
+
+            try:
+                timestamp = pd.to_datetime(t, unit="ms") if isinstance(t, (int, float)) else pd.to_datetime(t)
+            except Exception:
+                continue
+
+            rows.append({"timestamp": timestamp, "Open": o, "High": h, "Low": l, "Close": c, "Volume": v})
+
+        if not rows:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(rows)
+        df = df.set_index("timestamp").sort_index()
+        return df
+    except Exception as e:
+        print(f"❌ Error fetching data for {ticker}: {e}")
+        return pd.DataFrame()
+
 
 # ==============================================================================
-# FINANCIAL INDICATOR FUNCTIONS (Refactored for Polygon.io)
+# TECHNICAL INDICATORS
 # ==============================================================================
+def RSI(data_df=None, window=14):
+    """Relative Strength Index (momentum)."""
+    if data_df is None or data_df.empty:
+        return pd.Series()
 
-def simpleData(data_df, ticker, startDate, endDate):
-    """Calculate simple data from existing DataFrame to avoid extra API calls."""
-    simpleValues = {}
-    
-    if not data_df.empty:
-        # Use the data we already have
-        simpleValues["Open_Price"] = data_df['Open'].iloc[0]
-        simpleValues["High_Price"] = data_df['High'].max()
-        simpleValues["Previous_Close_Price"] = data_df['Close'].iloc[-1]  # Last close as proxy for previous close
-        simpleValues["Ten_Day_Volume"] = data_df['Volume'].tail(10).mean() if len(data_df) >= 10 else data_df['Volume'].mean()
-    else:
-        simpleValues["Open_Price"] = 0
-        simpleValues["High_Price"] = 0
-        simpleValues["Previous_Close_Price"] = 0
-        simpleValues["Ten_Day_Volume"] = 0
-    
-    return simpleValues
-
-def SMA(ticker, startDate, endDate, window):
-    data = _get_polygon_data(ticker, startDate, endDate)
-    if data.empty: return pd.Series()
-    sma_series = data["Close"].rolling(window=window).mean()
-    # Plotting logic can be uncommented if needed
-    # data["Close"].plot(label="Close Price")
-    # sma_series.plot(label=f"{window}-Day SMA")
-    # plt.legend(); plt.show()
-    return sma_series
-
-def EMA(ticker, startDate, endDate, window):
-    data = _get_polygon_data(ticker, startDate, endDate)
-    if data.empty: return pd.Series()
-    return data["Close"].ewm(span=window, adjust=False).mean()
-
-def RSI(data_df=None, ticker=None, start_date=None, end_date=None, window=14, for_graphing=False):
-    # If no DataFrame is provided, fetch the data. Otherwise, use the one passed in.
-    if data_df is None:
-        if ticker and start_date and end_date:
-            data_df = _get_polygon_data(ticker, start_date, end_date)
-        else:
-            return "Error: Ticker and dates required."
-
-    if data_df.empty: return "No data" if not for_graphing else []
-    
     delta = data_df["Close"].diff()
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
+
     avg_gain = gain.rolling(window=window).mean()
     avg_loss = loss.rolling(window=window).mean()
+
     rs = avg_gain / avg_loss.replace(0, 1e-10)
     rsi = (100 - (100 / (1 + rs))).dropna()
     rsi.index = rsi.index.date
-    
-    if for_graphing:
-        return [[float(val)] for val in rsi.values]
-    return rsi.to_string(index=False, header=False)
 
-def MACD(data_df=None, ticker=None, startDate=None, endDate=None, fast=12, slow=26, signal=9):
-    # If no DataFrame is provided, fetch the data. Otherwise, use the one passed in.
-    if data_df is None:
-        if ticker and startDate and endDate:
-            data_df = _get_polygon_data(ticker, startDate, endDate)
-        else:
-            return {"MACD": "", "Signal": "", "Histogram": pd.Series()}
+    return rsi
 
-    if data_df.empty: return {"MACD": "", "Signal": "", "Histogram": pd.Series()}
 
-    ema_fast = data_df["Close"].ewm(span=fast, adjust=False).mean()
-    ema_slow = data_df["Close"].ewm(span=slow, adjust=False).mean()
-    macd_line = (ema_fast - ema_slow)
+def MACD(data_df=None, fast=12, slow=26, signal=9):
+    """Moving Average Convergence Divergence (trend indicator)."""
+    if data_df is None or data_df.empty:
+        return {"MACD": pd.Series(), "Signal": pd.Series(), "Histogram": pd.Series()}
+
+    close = data_df["Close"]
+
+    # Calculate EMAs
+    ema_fast = close.ewm(span=fast, adjust=False).mean()
+    ema_slow = close.ewm(span=slow, adjust=False).mean()
+
+    # MACD line
+    macd_line = ema_fast - ema_slow
+
+    # Signal line
     signal_line = macd_line.ewm(span=signal, adjust=False).mean()
-    macd_histogram = macd_line - signal_line
 
+    # Histogram
+    macd_hist = macd_line - signal_line
+
+    # Align indexes to dates
     macd_line.index = macd_line.index.date
     signal_line.index = signal_line.index.date
+    macd_hist.index = macd_hist.index.date
 
-    return {
-        "MACD": macd_line.to_string(index=True, header=False),
-        "Signal": signal_line.to_string(index=True, header=False),
-        "Histogram": macd_histogram
-    }
+    return {"MACD": macd_line, "Signal": signal_line, "Histogram": macd_hist}
 
-def BollingerBands(ticker, startDate, endDate, window=20):
-    data = _get_polygon_data(ticker, startDate, endDate)
-    if data.empty: return {"SMA": pd.Series(), "Upper Band": pd.Series(), "Lower Band": pd.Series()}
+def ATR(data_df, window=14):
+    """Average True Range (volatility)."""
+    if data_df.empty: return pd.Series()
+    high, low, close = data_df['High'], data_df['Low'], data_df['Close']
+    hl = high - low
+    hc = (high - close.shift()).abs()
+    lc = (low - close.shift()).abs()
+    tr = pd.concat([hl, hc, lc], axis=1).max(axis=1)
+    atr = tr.rolling(window=window).mean()
+    atr.index = atr.index.date
+    return atr.dropna()
 
-    sma = data["Close"].rolling(window=window).mean()
-    std = data["Close"].rolling(window=window).std()
-    return {
-        "SMA": sma,
-        "Upper Band": sma + (2 * std),
-        "Lower Band": sma - (2 * std)
-    }
 
-def VWAP(ticker, startDate, endDate):
-    # Note: Polygon free tier may limit intraday data to recent dates.
-    data = _get_polygon_data(ticker, startDate, endDate, timespan="minute")
-    if data.empty:
-        print("No intraday data for VWAP. Choose a recent date or check API subscription.")
-        return pd.Series()
+def ADX(data_df, window=14):
+    """Average Directional Index (trend strength)."""
+    if data_df.empty: return pd.Series()
+    high, low, close = data_df['High'], data_df['Low'], data_df['Close']
+
+    plus_dm = high.diff()
+    minus_dm = low.shift() - low
+    plus_dm[plus_dm < 0] = 0
+    minus_dm[minus_dm < 0] = 0
+
+    tr = (high - low).combine((high - close.shift()).abs(), max).combine((low - close.shift()).abs(), max)
+    atr = tr.rolling(window=window).mean()
+
+    plus_di = 100 * (plus_dm.rolling(window=window).mean() / atr)
+    minus_di = 100 * (minus_dm.rolling(window=window).mean() / atr)
+    dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
+    adx = dx.rolling(window=window).mean()
+    adx.index = adx.index.date
+    return adx.dropna()
+
+
+def ROC(data_df, period=12):
+    """Rate of Change (momentum)."""
+    if data_df.empty: return pd.Series()
+    close = data_df['Close']
+    roc = ((close - close.shift(period)) / close.shift(period)) * 100
+    roc.index = roc.index.date
+    return roc.dropna()
+
+
+def CCI(data_df, window=20):
+    """Commodity Channel Index (overbought/oversold)."""
+    if data_df.empty: return pd.Series()
+    tp = (data_df['High'] + data_df['Low'] + data_df['Close']) / 3
+    sma = tp.rolling(window=window).mean()
+    mad = tp.rolling(window=window).apply(lambda x: (x - x.mean()).abs().mean())
+    cci = (tp - sma) / (0.015 * mad)
+    cci.index = cci.index.date
+    return cci.dropna()
+
+
+def CMF(data_df, window=20):
+    """Chaikin Money Flow (volume + price)."""
+    if data_df.empty: return pd.Series()
+    mfm = ((data_df['Close'] - data_df['Low']) - (data_df['High'] - data_df['Close'])) / (data_df['High'] - data_df['Low'])
+    mfv = mfm * data_df['Volume']
+    cmf = mfv.rolling(window=window).sum() / data_df['Volume'].rolling(window=window).sum()
+    cmf.index = cmf.index.date
+    return cmf.dropna()
+import plotly.graph_objects as go
+
+def plot_candlestick_with_indicators(data, rsi=None, macd=None, atr=None):
+    """
+    Plot candlestick chart with optional RSI, MACD, ATR overlays using Plotly.
     
-    typical_price = (data["High"] + data["Low"] + data["Close"]) / 3
-    vwap = (typical_price * data["Volume"]).cumsum() / data["Volume"].cumsum()
-    return vwap.to_string(index=True, header=False)
+    Args:
+        data: DataFrame with Open, High, Low, Close (datetime index)
+        rsi: pandas Series (optional)
+        macd: dict from MACD() function (optional)
+        atr: pandas Series (optional)
+    """
+    fig = go.Figure()
+
+    # --- Candlestick ---
+    fig.add_trace(go.Candlestick(
+        x=data.index,
+        open=data['Open'],
+        high=data['High'],
+        low=data['Low'],
+        close=data['Close'],
+        name="Price"
+    ))
+
+    # --- RSI Overlay ---
+    if rsi is not None and not rsi.empty:
+        fig.add_trace(go.Scatter(
+            x=rsi.index,
+            y=rsi,
+            line=dict(color="purple"),
+            name="RSI"
+        ))
+
+    # --- MACD Overlay ---
+    if macd is not None and not macd["MACD"].empty:
+        fig.add_trace(go.Scatter(
+            x=macd["MACD"].index,
+            y=macd["MACD"],
+            line=dict(color="blue"),
+            name="MACD"
+        ))
+        fig.add_trace(go.Scatter(
+            x=macd["Signal"].index,
+            y=macd["Signal"],
+            line=dict(color="orange"),
+            name="Signal"
+        ))
+
+    # --- ATR Overlay ---
+    if atr is not None and not atr.empty:
+        fig.add_trace(go.Scatter(
+            x=atr.index,
+            y=atr,
+            line=dict(color="red"),
+            name="ATR"
+        ))
+
+    fig.update_layout(
+        title="Candlestick with Indicators",
+        xaxis_rangeslider_visible=False,
+        template="plotly_dark",
+        height=700
+    )
+    fig.show()
 
 
 
 # ==============================================================================
 # MAIN EXECUTION SCRIPT
 # ==============================================================================
-
-
-
 if __name__ == "__main__":
     print("\nWhat stock are you looking to research about?")
     stockTicker = input().upper()
-    
-    # Use current date for more reliable data fetching
+
     endDate = pd.Timestamp.now().strftime('%Y-%m-%d')
     startDate = (pd.Timestamp.now() - pd.DateOffset(months=2)).strftime('%Y-%m-%d')
-    
+
     print(f"\n--- Analyzing {stockTicker} from {startDate} to {endDate} ---")
 
-    # --- Step 1: Fetch data EFFICIENTLY ---
-    # Fetch the main historical data ONCE.
     main_historical_data = _get_polygon_data(stockTicker, startDate, endDate)
     print(len(main_historical_data), main_historical_data.head(1))
-    # Calculate simple data from the data we already fetched
-    stockSimpleData = simpleData(main_historical_data, stockTicker, startDate, endDate)
 
-    # --- Step 2: Run analysis on the data you already have ---
-    # Check if the data was fetched successfully before analyzing
     if not main_historical_data.empty:
         print("✅ Data fetched successfully. Running analysis...")
-        # Pass the DataFrame to the functions instead of making them re-fetch it.
-        rsi_string = RSI(data_df=main_historical_data)
-        rsi_for_graphing = RSI(data_df=main_historical_data, for_graphing=True)
-        macd_result = MACD(data_df=main_historical_data)
-        
-        print("Simple Data:", stockSimpleData)
-        print("RSI:", rsi_string)
-        print("MACD:", macd_result)
+
+        # Indicators
+        atr = ATR(main_historical_data)
+        adx = ADX(main_historical_data)
+        roc = ROC(main_historical_data)
+        cci = CCI(main_historical_data)
+        cmf = CMF(main_historical_data)
+        rsi_series = RSI(main_historical_data)
+        macd_result = MACD(main_historical_data)
+
+        # --- CLASSIFICATION STEP ---
+        try:
+            atr_val = atr.iloc[-1] if not atr.empty else None
+            adx_val = adx.iloc[-1] if not adx.empty else None
+            rsi_val = rsi_series.iloc[-1] if not rsi_series.empty else None
+
+            category = classify_market(macd_result, rsi_val, atr_val, adx_val)
+            print(f"📊 Market Classification: {category}")
+        except Exception as e:
+            print(f"❌ Error when classifying market: {e}")
+
+        # --- Print results ---
+        print("RSI (last 5):", rsi_series.tail())
+        print("MACD (last 5):", macd_result["MACD"].tail())
+        print("Signal (last 5):", macd_result["Signal"].tail())
+        print("ATR (last 5):", atr.tail())
+        print("ADX (last 5):", adx.tail())
+        print("ROC (last 5):", roc.tail())
+        print("CCI (last 5):", cci.tail())
+        print("CMF (last 5):", cmf.tail())
 
     else:
         print(f"❌ Could not fetch historical data for {stockTicker}. Analysis aborted.")
+        
+    plot_candlestick_with_indicators(
+    main_historical_data,
+    rsi=rsi_series,
+    macd=macd_result,
+    atr=atr
+)
