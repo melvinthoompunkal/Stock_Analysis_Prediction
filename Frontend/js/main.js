@@ -4,10 +4,11 @@
 
 // Global variables
 let currentTicker = '';
-let currentAnalysisType = 'short'; // 'short' or 'long'
+let currentAnalysisType = 'short'; // 'short' | 'long' | 'day'
 let priceChart = null;
 let rsiChart = null;
 let macdChart = null;
+let lastAnalysisData = null;
 
 // API base URL
 const API_BASE_URL = 'http://localhost:5000/api';
@@ -125,11 +126,15 @@ function selectAnalysisType(type) {
     // Update UI
     const shortOption = document.getElementById('shortTermOption');
     const longOption = document.getElementById('longTermOption');
+    const dayOption = document.getElementById('dayTradeOption');
     const descriptionText = document.getElementById('descriptionText');
     
     // Reset all options
     shortOption.querySelector('div').className = 'border-2 border-blue-200 rounded-xl p-4 cursor-pointer transition-all hover:border-blue-400 hover:bg-blue-50';
     longOption.querySelector('div').className = 'border-2 border-green-200 rounded-xl p-4 cursor-pointer transition-all hover:border-green-400 hover:bg-green-50';
+    if (dayOption) {
+        dayOption.querySelector('div').className = 'border-2 border-yellow-200 rounded-xl p-4 cursor-pointer transition-all hover:border-yellow-400 hover:bg-yellow-50';
+    }
     
     if (type === 'short') {
         shortOption.querySelector('div').className = 'border-2 border-blue-500 bg-blue-50 rounded-xl p-4 cursor-pointer transition-all';
@@ -138,13 +143,31 @@ function selectAnalysisType(type) {
             📰 News sentiment analysis • 📈 Technical momentum • ⚡ Quick price movements<br>
             <span class="text-blue-600">Perfect for day trading and swing trading strategies</span>
         `;
-    } else {
+    } else if (type === 'long') {
         longOption.querySelector('div').className = 'border-2 border-green-500 bg-green-50 rounded-xl p-4 cursor-pointer transition-all';
         descriptionText.innerHTML = `
             <strong>Long-Term Analysis Selected:</strong><br>
             🏢 Company fundamentals • 📊 Financial health • 🎯 Growth potential<br>
             <span class="text-green-600">Perfect for investment portfolios and long-term holdings</span>
         `;
+    } else if (type === 'day') {
+        if (dayOption) {
+            dayOption.querySelector('div').className = 'border-2 border-yellow-500 bg-yellow-50 rounded-xl p-4 cursor-pointer transition-all';
+        }
+        descriptionText.innerHTML = `
+            <strong>Day Trade Analysis Selected:</strong><br>
+            ⚡ Intraday/next-session move • 📉 Volatility-aware • 🧮 Options confidence<br>
+            <span class="text-yellow-600">Great for same-day or next-morning strategies</span>
+        `;
+    }
+
+    // Re-render reasoning list if switching tabs after results
+    if (lastAnalysisData) {
+        updateAIReasoning(
+            lastAnalysisData.reasoning,
+            lastAnalysisData.reasoning_tabs,
+            lastAnalysisData.reasoning_charts
+        );
     }
 }
 
@@ -177,11 +200,16 @@ async function analyzeStock() {
             setTimeout(() => updateLoadingStep('Calculating momentum indicators...'), 2000);
             setTimeout(() => updateLoadingStep('Generating short-term predictions...'), 3000);
             setTimeout(() => updateLoadingStep('Assessing market volatility...'), 4000);
-        } else {
+        } else if (currentAnalysisType === 'long') {
             setTimeout(() => updateLoadingStep('Analyzing company fundamentals...'), 1000);
             setTimeout(() => updateLoadingStep('Evaluating financial health...'), 2000);
             setTimeout(() => updateLoadingStep('Generating long-term predictions...'), 3000);
             setTimeout(() => updateLoadingStep('Assessing growth potential...'), 4000);
+        } else {
+            setTimeout(() => updateLoadingStep('Scanning intraday momentum...'), 1000);
+            setTimeout(() => updateLoadingStep('Estimating next-session direction...'), 2000);
+            setTimeout(() => updateLoadingStep('Calculating risk and volatility...'), 3000);
+            setTimeout(() => updateLoadingStep('Computing options confidence...'), 4000);
         }
         
         const response = await fetchWithErrorHandling(`${API_BASE_URL}/analyze/${ticker}?type=${currentAnalysisType}`, {
@@ -210,8 +238,9 @@ async function analyzeStock() {
 // ==============================================================================
 
 function displayAIResults(data) {
+    lastAnalysisData = data;
     // Update stock overview
-    const analysisTypeLabel = currentAnalysisType === 'short' ? 'Short-Term' : 'Long-Term';
+    const analysisTypeLabel = currentAnalysisType === 'short' ? 'Short-Term' : (currentAnalysisType === 'long' ? 'Long-Term' : 'Day Trade');
     document.getElementById('stockTitle').textContent = `${data.ticker} - ${analysisTypeLabel} AI Analysis`;
     document.getElementById('analysisDate').textContent = `Analysis Date: ${data.analysis_date}`;
     
@@ -236,11 +265,16 @@ function displayAIResults(data) {
         document.getElementById('longTermScore').textContent = formatCurrency(data.predicted_price);
         document.getElementById('metric1Label').textContent = 'Predicted Return (30 days)';
         document.getElementById('metric2Label').textContent = 'Target Price';
-    } else {
+    } else if (currentAnalysisType === 'long') {
         document.getElementById('shortTermScore').textContent = formatCurrency(data.predicted_price);
         document.getElementById('longTermScore').textContent = `${data.predicted_return.toFixed(2)}%`;
         document.getElementById('metric1Label').textContent = 'Target Price (12 months)';
         document.getElementById('metric2Label').textContent = 'Expected Return';
+    } else {
+        document.getElementById('shortTermScore').textContent = `${data.predicted_return.toFixed(2)}%`;
+        document.getElementById('longTermScore').textContent = formatCurrency(data.predicted_price);
+        document.getElementById('metric1Label').textContent = 'Predicted Return (next session)';
+        document.getElementById('metric2Label').textContent = 'Expected Open/Close';
     }
     
     // Update confidence levels
@@ -251,26 +285,62 @@ function displayAIResults(data) {
     document.getElementById('articleCount').textContent = data.recommendation.score;
     document.getElementById('marketClassification').textContent = recommendation.action;
     document.getElementById('overallConfidence').textContent = `${data.confidence.toFixed(1)}%`;
+    const optionsConfidenceEl = document.getElementById('optionsConfidence');
+    if (optionsConfidenceEl) {
+        optionsConfidenceEl.textContent = data.option_confidence !== undefined ? `${data.option_confidence.toFixed(1)}%` : '-';
+    }
     
     // Update AI reasoning
-    updateAIReasoning(data.reasoning);
+    updateAIReasoning(data.reasoning, data.reasoning_tabs, data.reasoning_charts);
     
     // Update recommendation
     updateAIRecommendation(data);
     
     // Create simple prediction chart
     createPredictionChart(data);
+    if (data.reasoning_charts) {
+        renderReasoningCharts(data.reasoning_charts);
+    }
     
     // Update prediction table
     updatePredictionTable(data);
 }
 
-function updateAIReasoning(reasoning) {
+// Reasoning tabs state
+let currentReasoningTab = 'technical';
+
+function selectReasoningTab(tab) {
+    currentReasoningTab = tab;
+    const tabTechnical = document.getElementById('tabTechnical');
+    const tabNonTechnical = document.getElementById('tabNonTechnical');
+    if (tabTechnical && tabNonTechnical) {
+        if (tab === 'technical') {
+            tabTechnical.className = 'px-3 py-1 rounded bg-blue-100 text-blue-700';
+            tabNonTechnical.className = 'px-3 py-1 rounded bg-gray-100 text-gray-700';
+        } else {
+            tabTechnical.className = 'px-3 py-1 rounded bg-gray-100 text-gray-700';
+            tabNonTechnical.className = 'px-3 py-1 rounded bg-blue-100 text-blue-700';
+        }
+    }
+    if (lastAnalysisData) {
+        updateAIReasoning(
+            lastAnalysisData.reasoning,
+            lastAnalysisData.reasoning_tabs,
+            lastAnalysisData.reasoning_charts
+        );
+    }
+}
+
+function updateAIReasoning(reasoning, reasoningTabs, charts) {
     const factorsList = document.getElementById('keyFactors');
     factorsList.innerHTML = '';
     
-    if (reasoning && reasoning.length > 0) {
-        reasoning.forEach(reason => {
+    const listToRender = reasoningTabs && reasoningTabs[currentReasoningTab]
+        ? reasoningTabs[currentReasoningTab]
+        : (reasoning || []);
+
+    if (listToRender && listToRender.length > 0) {
+        listToRender.forEach(reason => {
             const li = document.createElement('li');
             li.textContent = `• ${reason}`;
             li.className = 'text-sm text-gray-600';
@@ -282,6 +352,55 @@ function updateAIReasoning(reasoning) {
         li.className = 'text-sm text-gray-600';
         factorsList.appendChild(li);
     }
+
+    // Charts in reasoning section (if provided)
+    if (charts) {
+        renderReasoningCharts(charts);
+    }
+}
+
+let directionChartInstance = null;
+let confidenceRiskChartInstance = null;
+
+function renderReasoningCharts(charts) {
+    const dirCtx = document.getElementById('directionChart');
+    const crCtx = document.getElementById('confidenceRiskChart');
+    if (!dirCtx || !crCtx) return;
+    
+    if (directionChartInstance) directionChartInstance.destroy();
+    if (confidenceRiskChartInstance) confidenceRiskChartInstance.destroy();
+    
+    directionChartInstance = new Chart(dirCtx.getContext('2d'), {
+        type: 'doughnut',
+        data: {
+            labels: ['Up', 'Down'],
+            datasets: [{
+                data: [charts.direction.up, charts.direction.down],
+                backgroundColor: ['rgba(34,197,94,0.8)', 'rgba(239,68,68,0.8)'],
+                borderColor: ['rgb(34,197,94)', 'rgb(239,68,68)'],
+                borderWidth: 1
+            }]
+        },
+        options: { responsive: true, plugins: { legend: { position: 'bottom' } } }
+    });
+    
+    confidenceRiskChartInstance = new Chart(crCtx.getContext('2d'), {
+        type: 'bar',
+        data: {
+            labels: ['Confidence', 'Risk'],
+            datasets: [{
+                data: [charts.confidence_vs_risk.confidence, charts.confidence_vs_risk.risk],
+                backgroundColor: ['rgba(59,130,246,0.8)', 'rgba(245,158,11,0.8)'],
+                borderColor: ['rgb(59,130,246)', 'rgb(245,158,11)'],
+                borderWidth: 1
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: { y: { beginAtZero: true, max: 100 } }
+        }
+    });
 }
 
 function getRecommendationEmoji(action) {
@@ -341,7 +460,7 @@ function createPredictionChart(data) {
     // Create a simple prediction visualization
     const currentPrice = data.current_price;
     const predictedPrice = data.predicted_price;
-    const predictedReturn = data.predicted_return * 100;
+    const predictedReturn = data.predicted_return;
     
     priceChart = new Chart(ctx, {
         type: 'bar',
@@ -409,7 +528,13 @@ function updatePredictionTable(data) {
             value: `${data.recommendation.score}/100`,
             interpretation: data.recommendation.score > 75 ? 'Strong recommendation' : data.recommendation.score > 50 ? 'Moderate recommendation' : 'Weak recommendation',
             signal: data.recommendation.action
-        }
+        },
+        ...(data.option_confidence !== undefined ? [{
+            name: 'Options Confidence',
+            value: `${data.option_confidence.toFixed(1)}%`,
+            interpretation: data.option_confidence > 75 ? 'High options confidence' : data.option_confidence > 50 ? 'Moderate options confidence' : 'Low options confidence',
+            signal: data.option_confidence > 60 ? 'Favorable' : 'Caution'
+        }] : [])
     ];
     
     predictionData.forEach(item => {
