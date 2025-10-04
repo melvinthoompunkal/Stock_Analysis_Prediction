@@ -1026,11 +1026,11 @@ class PredictionAnalyzer:
         ret_5y_norm = norm_ret(ret_5y)
 
         # RSI
-        rsi = self._calculate_rsi(close, 14).iloc[-1]
+        rsi = self.prediction_engine._calculate_rsi(close, 14).iloc[-1]
         rsi_norm = float(((rsi if not np.isnan(rsi) else 50.0) - 50.0) / 50.0)
 
         # MACD histogram
-        macd_dict = self._calculate_macd(close)
+        macd_dict = self.prediction_engine._calculate_macd(close)
         macd_hist = float(macd_dict['histogram'].iloc[-1]) if not np.isnan(macd_dict['histogram'].iloc[-1]) else 0.0
         macd_norm = float(np.tanh(macd_hist * 10.0))
 
