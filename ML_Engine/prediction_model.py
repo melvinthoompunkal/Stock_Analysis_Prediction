@@ -574,7 +574,7 @@ class PredictionAnalyzer:
         predicted_return = prediction_result['prediction']
         predicted_price = current_price * (1 + predicted_return)
         
-        # Generate short-term recommendation
+        # Generate short-term recommendation (action/strength)
         recommendation = self._generate_short_term_recommendation(predicted_return, prediction_result['confidence'])
         
         # Calculate short-term risk score
@@ -582,6 +582,10 @@ class PredictionAnalyzer:
         
         # Generate short-term reasoning
         reasoning = self._generate_short_term_reasoning(df, prediction_result)
+
+        # Compute composite recommendation score with multiple factors (reduces 50/100 bias)
+        composite_score, score_breakdown = self._compute_composite_score(df, prediction_result, horizon='short')
+        recommendation['score'] = composite_score
         
         return {
             'ticker': ticker,
@@ -593,6 +597,7 @@ class PredictionAnalyzer:
             'risk_score': risk_score,
             'recommendation': recommendation,
             'reasoning': reasoning,
+            'score_breakdown': score_breakdown,
             'analysis_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'model_performance': self.prediction_engine.get_model_performance()
         }
@@ -624,7 +629,7 @@ class PredictionAnalyzer:
         predicted_return = prediction_result['prediction']
         predicted_price = current_price * (1 + predicted_return)
         
-        # Generate long-term recommendation
+        # Generate long-term recommendation (action/strength)
         recommendation = self._generate_long_term_recommendation(predicted_return, prediction_result['confidence'])
         
         # Calculate long-term risk score
@@ -632,6 +637,10 @@ class PredictionAnalyzer:
         
         # Generate long-term reasoning
         reasoning = self._generate_long_term_reasoning(df, prediction_result)
+
+        # Compute composite recommendation score with additional long-horizon factors
+        composite_score, score_breakdown = self._compute_composite_score(df, prediction_result, horizon='long')
+        recommendation['score'] = composite_score
         
         return {
             'ticker': ticker,
@@ -643,6 +652,7 @@ class PredictionAnalyzer:
             'risk_score': risk_score,
             'recommendation': recommendation,
             'reasoning': reasoning,
+            'score_breakdown': score_breakdown,
             'analysis_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'model_performance': self.prediction_engine.get_model_performance()
         }
@@ -686,6 +696,10 @@ class PredictionAnalyzer:
         risk_score = self._calculate_day_trade_risk(df, prediction_result)
         reasoning_tabs = self._generate_day_trade_reasoning(df, prediction_result, intraday_volatility, up_probability)
 
+        # Composite score tuning for day-trade horizon
+        composite_score, score_breakdown = self._compute_composite_score(df, prediction_result, horizon='day')
+        recommendation['score'] = composite_score
+
         # Options confidence proxy: more confidence with stronger signal and volatility (liquidity/opportunity)
         option_confidence = float(max(0, min(100, (prediction_result['confidence'] * (0.7 + 0.3 * (intraday_volatility / 100.0))))))
 
@@ -720,6 +734,7 @@ class PredictionAnalyzer:
             'reasoning_tabs': reasoning_tabs,
             'reasoning_charts': reasoning_charts,
             'option_confidence': round(option_confidence, 1),
+            'score_breakdown': score_breakdown,
             'analysis_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'model_performance': self.prediction_engine.get_model_performance()
         }
@@ -919,6 +934,149 @@ class PredictionAnalyzer:
             reasoning.append("Increased volatility may indicate uncertainty or opportunity")
         
         return reasoning
+
+    # --------------------------------------------------------------------------
+    # Composite scoring to reduce 50/100 bias and incorporate multi-horizon data
+    # --------------------------------------------------------------------------
+    def _compute_composite_score(self, df: pd.DataFrame, prediction_result: dict, horizon: str = 'short'):
+        """Compute a composite 0-100 score using model signal, confidence, and
+        multi-horizon technical context (6m/1y/5y), volatility regime, volume,
+        RSI, MACD, trend slope, and support/resistance proximity.
+
+        Returns (score:int, breakdown:dict)
+        """
+        close = df['Close']
+        volume = df['Volume'] if 'Volume' in df else pd.Series(index=close.index, data=np.nan)
+        latest_close = float(close.iloc[-1])
+
+        # Horizon-specific weights
+        weights = {
+            'short': {
+                'pred_signal': 0.35, 'confidence': 0.15,
+                'ret_6m': 0.10, 'ret_1y': 0.05, 'ret_5y': 0.00,
+                'rsi': 0.05, 'macd': 0.05, 'vol_regime': 0.03,
+                'volume_ratio': 0.05, 'trend_slope': 0.04, 'sr_distance': 0.03
+            },
+            'long': {
+                'pred_signal': 0.20, 'confidence': 0.15,
+                'ret_6m': 0.15, 'ret_1y': 0.10, 'ret_5y': 0.10,
+                'rsi': 0.03, 'macd': 0.04, 'vol_regime': 0.05,
+                'volume_ratio': 0.02, 'trend_slope': 0.10, 'sr_distance': 0.06
+            },
+            'day': {
+                'pred_signal': 0.30, 'confidence': 0.20,
+                'ret_6m': 0.10, 'ret_1y': 0.05, 'ret_5y': 0.00,
+                'rsi': 0.05, 'macd': 0.07, 'vol_regime': 0.03,
+                'volume_ratio': 0.10, 'trend_slope': 0.05, 'sr_distance': 0.05
+            }
+        }.get(horizon, {})
+
+        # Helper to safely compute returns over N days
+        def trailing_return(days: int) -> float:
+            if len(close) <= days:
+                return 0.0
+            past = float(close.iloc[-days-1])
+            if past == 0:
+                return 0.0
+            return (latest_close / past) - 1.0
+
+        # Indicators
+        # Predicted return signal (normalized with tanh for stability)
+        pred_signal = float(prediction_result.get('prediction', 0.0)) * 100.0  # percent
+        pred_signal_norm = float(np.tanh(pred_signal / 3.0))  # ~1% => noticeable
+
+        # Confidence centered around 0
+        confidence = float(prediction_result.get('confidence', 50.0)) / 100.0
+        confidence_centered = (confidence - 0.5) * 2.0
+
+        # Multi-horizon returns
+        ret_6m = trailing_return(126)  # ~6 months trading days
+        ret_1y = trailing_return(252)
+        ret_5y = trailing_return(1260)
+        # Normalize returns into [-1,1] using 50% cap
+        def norm_ret(x: float) -> float:
+            return float(max(-1.0, min(1.0, x / 0.5)))
+        ret_6m_norm = norm_ret(ret_6m)
+        ret_1y_norm = norm_ret(ret_1y)
+        ret_5y_norm = norm_ret(ret_5y)
+
+        # RSI
+        rsi = self._calculate_rsi(close, 14).iloc[-1]
+        rsi_norm = float(((rsi if not np.isnan(rsi) else 50.0) - 50.0) / 50.0)
+
+        # MACD histogram
+        macd_dict = self._calculate_macd(close)
+        macd_hist = float(macd_dict['histogram'].iloc[-1]) if not np.isnan(macd_dict['histogram'].iloc[-1]) else 0.0
+        macd_norm = float(np.tanh(macd_hist * 10.0))
+
+        # Volatility regime: 20d vs 100d realized vol
+        vol_20 = float(close.pct_change().tail(20).std() or 0.0)
+        vol_100 = float(close.pct_change().tail(100).std() or vol_20 or 1e-9)
+        vol_ratio = vol_20 / (vol_100 if vol_100 != 0 else 1e-9)
+        vol_regime = -(vol_ratio - 1.0)  # high recent vol -> negative
+        vol_regime = float(max(-1.0, min(1.0, vol_regime)))
+
+        # Volume ratio: last day vs 20d avg
+        if volume.isna().all():
+            volume_ratio_norm = 0.0
+        else:
+            vol_avg = float(volume.tail(20).mean() or 1e-9)
+            last_vol = float(volume.iloc[-1] or vol_avg)
+            volume_ratio = (last_vol / vol_avg) - 1.0
+            volume_ratio_norm = float(max(-1.0, min(1.0, volume_ratio)))
+
+        # Trend slope over last 20 days
+        if len(close) >= 20:
+            x = np.arange(20)
+            y = close.tail(20).values
+            slope = np.polyfit(x, y, 1)[0] / (np.mean(y) if np.mean(y) != 0 else 1e-9)
+            trend_slope_norm = float(np.tanh(slope * 50.0))
+        else:
+            trend_slope_norm = 0.0
+
+        # Support/Resistance proximity (20d)
+        recent_high = float(df['High'].tail(20).max()) if 'High' in df else latest_close
+        recent_low = float(df['Low'].tail(20).min()) if 'Low' in df else latest_close
+        rng = max(1e-9, recent_high - recent_low)
+        pos = (latest_close - recent_low) / rng  # 0 bottom, 1 top
+        sr_distance = float((0.5 - pos) * 2.0)  # near bottom -> positive, near top -> negative
+
+        # Weighted sum in [-1,1]
+        contribs = {
+            'pred_signal': pred_signal_norm,
+            'confidence': confidence_centered,
+            'ret_6m': ret_6m_norm,
+            'ret_1y': ret_1y_norm,
+            'ret_5y': ret_5y_norm,
+            'rsi': rsi_norm,
+            'macd': macd_norm,
+            'vol_regime': vol_regime,
+            'volume_ratio': volume_ratio_norm,
+            'trend_slope': trend_slope_norm,
+            'sr_distance': sr_distance
+        }
+
+        raw = 0.0
+        breakdown = {}
+        for key, value in contribs.items():
+            w = float(weights.get(key, 0.0))
+            term = w * value
+            breakdown[key] = {
+                'weight': round(w, 3),
+                'value': round(value, 3),
+                'contribution': round(term, 3)
+            }
+            raw += term
+
+        # Add tiny deterministic jitter to avoid exact 50/100 stagnation
+        jitter = 0.005 if raw >= 0 else -0.005
+        raw = float(max(-1.0, min(1.0, raw + jitter)))
+
+        # Map to [0,100]
+        score = int(round(50.0 + 50.0 * raw))
+        score = int(max(0, min(100, score)))
+
+        return score, breakdown
 
     def _generate_day_trade_reasoning(self, df, prediction_result, intraday_volatility, up_probability):
         """Generate day-trade reasoning with both technical and non-technical perspectives."""
