@@ -112,9 +112,20 @@ def start_ai_system():
     print("=" * 60)
     
     try:
-        # Change to Frontend directory
-        os.chdir('Frontend')
-        
+        # Resolve absolute paths
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        frontend_dir = os.path.join(script_dir, 'Frontend')
+
+        if not os.path.isdir(frontend_dir):
+            raise FileNotFoundError(f"Frontend directory not found at: {frontend_dir}")
+
+        # Ensure Frontend directory is importable before importing app
+        if frontend_dir not in sys.path:
+            sys.path.insert(0, frontend_dir)
+
+        # Also set CWD for any relative assets/templates
+        os.chdir(frontend_dir)
+
         # Start the Flask app
         print("🚀 Launching AI prediction API...")
         print("   System: AI-powered stock predictions with 70-80% accuracy")
@@ -122,8 +133,22 @@ def start_ai_system():
         print("   Health Check: http://localhost:5000/api/health")
         print("=" * 60)
         
-        # Import and run the app
-        from app import app
+        # Import and run the app (module: Frontend/app.py)
+        try:
+            from app import app
+        except ModuleNotFoundError as e:
+            # As a fallback, attempt a dynamic import with explicit path
+            import importlib.util
+            app_py = os.path.join(frontend_dir, 'app.py')
+            if os.path.exists(app_py):
+                spec = importlib.util.spec_from_file_location('app', app_py)
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)  # type: ignore
+                app = getattr(module, 'app', None)
+                if app is None:
+                    raise RuntimeError("'app' Flask instance not found in app.py") from e
+            else:
+                raise
         app.run(debug=False, host='0.0.0.0', port=5000)
         
     except KeyboardInterrupt:
