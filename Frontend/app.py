@@ -198,14 +198,16 @@ if __name__ == '__main__':
         else:
             print("⚠️ No pre-trained models found - will train on first analysis")
         
+        # Determine port (default 5500)
+        port = int(os.getenv('PORT', '5500'))
         print("🚀 AI Stock Prediction API ready!")
         print("   Service: AI-powered stock predictions with 80-85% accuracy")
-        print("   Endpoint: http://localhost:5000")
-        print("   Health Check: http://localhost:5000/api/health")
+        print(f"   Endpoint: http://localhost:{port}")
+        print(f"   Health Check: http://localhost:{port}/api/health")
         print("=" * 50)
         
         # Start Flask app
-        app.run(debug=False, host='0.0.0.0', port=5000)
+        app.run(debug=False, host='0.0.0.0', port=port)
         
     except Exception as e:
         print(f"❌ Failed to start AI API: {e}")

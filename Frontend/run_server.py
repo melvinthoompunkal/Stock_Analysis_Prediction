@@ -107,12 +107,13 @@ def start_server():
         # Import and run the Flask app
         from app import app
         
-        print("✅ Server starting on http://localhost:5000")
+        port = int(os.getenv('PORT', '5500'))
+        print(f"✅ Server starting on http://localhost:{port}")
         print("📊 Open your browser and navigate to the URL above")
         print("🔄 Press Ctrl+C to stop the server")
         print("=" * 50)
         
-        app.run(debug=True, host='0.0.0.0', port=5000)
+        app.run(debug=True, host='0.0.0.0', port=port)
         
     except KeyboardInterrupt:
         print("\n👋 Server stopped by user")
