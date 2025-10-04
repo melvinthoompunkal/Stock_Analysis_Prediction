@@ -129,8 +129,9 @@ def start_ai_system():
         # Start the Flask app
         print("🚀 Launching AI prediction API...")
         print("   System: AI-powered stock predictions with 70-80% accuracy")
-        print("   Endpoint: http://localhost:5000")
-        print("   Health Check: http://localhost:5000/api/health")
+        port = int(os.getenv('PORT', '5500'))
+        print(f"   Endpoint: http://localhost:{port}")
+        print(f"   Health Check: http://localhost:{port}/api/health")
         print("=" * 60)
         
         # Import and run the app (module: Frontend/app.py)
@@ -149,7 +150,7 @@ def start_ai_system():
                     raise RuntimeError("'app' Flask instance not found in app.py") from e
             else:
                 raise
-        app.run(debug=False, host='0.0.0.0', port=5000)
+        app.run(debug=False, host='0.0.0.0', port=port)
         
     except KeyboardInterrupt:
         print("\n👋 AI system stopped by user")

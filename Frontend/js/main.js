@@ -10,8 +10,8 @@ let rsiChart = null;
 let macdChart = null;
 let lastAnalysisData = null;
 
-// API base URL
-const API_BASE_URL = 'http://localhost:5000/api';
+// API base URL (defaults to port 5500, can be overridden via window.API_BASE_URL)
+const API_BASE_URL = window.API_BASE_URL || 'http://localhost:5500/api';
 
 // ==============================================================================
 // UTILITY FUNCTIONS
