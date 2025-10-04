@@ -646,6 +646,83 @@ class PredictionAnalyzer:
             'analysis_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'model_performance': self.prediction_engine.get_model_performance()
         }
+
+    def analyze_stock_day_trade(self, df, ticker):
+        """
+        Day-trade analysis focused on next-session move (intraday/next morning).
+        Uses 1-day horizon with emphasis on recent momentum and volatility.
+        """
+        # Train models if not already trained
+        if not self.prediction_engine.is_trained:
+            train_result = self.prediction_engine.train_models(df)
+            if 'error' in train_result:
+                return train_result
+
+        # Make 1-day prediction
+        prediction_result = self.prediction_engine.predict(df, days_ahead=1)
+        if 'error' in prediction_result:
+            return prediction_result
+
+        current_price = df['Close'].iloc[-1]
+        predicted_return = prediction_result['prediction']  # fractional
+        predicted_price = current_price * (1 + predicted_return)
+
+        # Intraday/overnight characteristics (approximations with daily data)
+        tr = (df['High'] - df['Low']) / df['Close']
+        intraday_volatility = float(tr.tail(14).mean() * 100) if len(tr) >= 14 else float(tr.mean() * 100)
+        intraday_volatility = float(max(0, min(100, intraday_volatility)))
+
+        # Direction probability blending model signal and confidence
+        # Map predicted_return (in %) to a tilt around 0.5 and blend with confidence
+        pred_pct = float(predicted_return * 100.0)
+        tilt = max(-10.0, min(10.0, pred_pct)) / 20.0  # -0.5 .. 0.5
+        conf_prob = prediction_result['confidence'] / 100.0
+        model_direction_prob = 0.5 + (tilt if pred_pct >= 0 else -tilt)
+        up_probability = 0.5 * model_direction_prob + 0.5 * (conf_prob if pred_pct >= 0 else (1 - conf_prob))
+        up_probability = float(max(0.0, min(1.0, up_probability)))
+
+        # Compute specialized outputs
+        recommendation = self._generate_day_trade_recommendation(predicted_return, prediction_result['confidence'], intraday_volatility)
+        risk_score = self._calculate_day_trade_risk(df, prediction_result)
+        reasoning_tabs = self._generate_day_trade_reasoning(df, prediction_result, intraday_volatility, up_probability)
+
+        # Options confidence proxy: more confidence with stronger signal and volatility (liquidity/opportunity)
+        option_confidence = float(max(0, min(100, (prediction_result['confidence'] * (0.7 + 0.3 * (intraday_volatility / 100.0))))))
+
+        # Chart payloads for frontend reasoning visuals
+        reasoning_charts = {
+            'direction': {
+                'up': round(up_probability * 100, 1),
+                'down': round((1 - up_probability) * 100, 1)
+            },
+            'volatility': {
+                'value': round(intraday_volatility, 1)
+            },
+            'confidence_vs_risk': {
+                'confidence': round(prediction_result['confidence'], 1),
+                'risk': round(risk_score, 1)
+            }
+        }
+
+        # Flattened reasoning (fallback for older UIs)
+        combined_reasoning = reasoning_tabs.get('technical', [])[:2] + reasoning_tabs.get('non_technical', [])[:2]
+
+        return {
+            'ticker': ticker,
+            'analysis_type': 'day_trade',
+            'current_price': current_price,
+            'predicted_price': predicted_price,
+            'predicted_return': predicted_return * 100,
+            'confidence': prediction_result['confidence'],
+            'risk_score': risk_score,
+            'recommendation': recommendation,
+            'reasoning': combined_reasoning,
+            'reasoning_tabs': reasoning_tabs,
+            'reasoning_charts': reasoning_charts,
+            'option_confidence': round(option_confidence, 1),
+            'analysis_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'model_performance': self.prediction_engine.get_model_performance()
+        }
     
     def _generate_short_term_recommendation(self, predicted_return, confidence):
         """Generate short-term recommendation based on momentum and news."""
@@ -690,6 +767,30 @@ class PredictionAnalyzer:
                 return {'action': 'SELL', 'strength': 'Fundamental concerns identified', 'score': 25}
         else:
             return {'action': 'HOLD', 'strength': 'Stable fundamentals - moderate growth expected', 'score': 50}
+
+    def _generate_day_trade_recommendation(self, predicted_return, confidence, intraday_volatility):
+        """Generate day-trade recommendation using tighter thresholds and volatility context."""
+        # Confidence gate
+        if confidence < 55:
+            return {
+                'action': 'HOLD',
+                'strength': 'Low confidence for day trade - avoid overtrading',
+                'score': 50
+            }
+
+        # Tighter thresholds for 1-day horizon
+        if predicted_return > 0.01:  # >1% expected move up
+            if confidence > 75 and intraday_volatility < 35:
+                return {'action': 'STRONG BUY', 'strength': 'Clear upward bias with supportive volatility', 'score': 85}
+            else:
+                return {'action': 'BUY', 'strength': 'Upward bias detected for next session', 'score': 70}
+        elif predicted_return < -0.01:  # >1% expected move down
+            if confidence > 75 and intraday_volatility < 35:
+                return {'action': 'STRONG SELL', 'strength': 'Clear downward bias with supportive volatility', 'score': 15}
+            else:
+                return {'action': 'SELL', 'strength': 'Downward bias detected for next session', 'score': 30}
+        else:
+            return {'action': 'HOLD', 'strength': 'Minimal expected move - wait for setup', 'score': 50}
     
     def _calculate_short_term_risk(self, df, prediction_result):
         """Calculate short-term risk based on volatility and momentum."""
@@ -720,6 +821,15 @@ class PredictionAnalyzer:
         risk_score = (volatility_risk * (1 - confidence_factor)) * 0.8
         
         return min(100, max(0, risk_score))
+
+    def _calculate_day_trade_risk(self, df, prediction_result):
+        """Calculate day-trade risk emphasizing very recent volatility and uncertainty."""
+        recent_returns = df['Close'].pct_change().tail(3)  # last 3 days
+        volatility = recent_returns.std() * np.sqrt(252)
+        confidence_factor = prediction_result['confidence'] / 100.0
+        volatility_risk = min(100, (volatility * 100) * 1.2)
+        risk_score = (volatility_risk * (1 - confidence_factor)) * 1.5
+        return float(min(100, max(0, risk_score)))
     
     def _generate_short_term_reasoning(self, df, prediction_result):
         """Generate short-term reasoning focused on momentum and news."""
@@ -809,6 +919,50 @@ class PredictionAnalyzer:
             reasoning.append("Increased volatility may indicate uncertainty or opportunity")
         
         return reasoning
+
+    def _generate_day_trade_reasoning(self, df, prediction_result, intraday_volatility, up_probability):
+        """Generate day-trade reasoning with both technical and non-technical perspectives."""
+        technical = []
+        non_technical = []
+
+        # Technical points
+        last_close = df['Close'].iloc[-1]
+        sma_5 = df['Close'].tail(5).mean() if len(df) >= 5 else last_close
+        sma_20 = df['Close'].tail(20).mean() if len(df) >= 20 else last_close
+        momentum_3d = df['Close'].pct_change(3).iloc[-1] if len(df) >= 4 else 0
+
+        if last_close > sma_5 > sma_20:
+            technical.append('Short-term trend alignment (price > SMA5 > SMA20) supports continuation')
+        elif last_close < sma_5 < sma_20:
+            technical.append('Short-term downtrend alignment (price < SMA5 < SMA20) increases downside risk')
+        else:
+            technical.append('Mixed short-term trend signals suggest caution')
+
+        if abs(momentum_3d) > 0.02:
+            technical.append('Recent 3-day momentum indicates potential follow-through next session')
+        else:
+            technical.append('Muted recent momentum reduces conviction on intraday move')
+
+        if intraday_volatility > 40:
+            technical.append('High intraday volatility: expect wider trading ranges')
+        elif intraday_volatility < 20:
+            technical.append('Low intraday volatility: tighter ranges, cleaner setups')
+
+        # Non-technical points
+        if prediction_result['confidence'] > 75:
+            non_technical.append('High model confidence strengthens the probability of the expected move')
+        elif prediction_result['confidence'] < 55:
+            non_technical.append('Low model confidence: avoid large position sizes')
+        else:
+            non_technical.append('Moderate confidence: consider risk-managed sizing')
+
+        non_technical.append(f"Directional probability: {round(up_probability*100, 1)}% up / {round((1-up_probability)*100, 1)}% down")
+        non_technical.append('Consider liquidity and spreads during market open; slippage can be material')
+
+        return {
+            'technical': technical,
+            'non_technical': non_technical
+        }
 
 
 if __name__ == "__main__":

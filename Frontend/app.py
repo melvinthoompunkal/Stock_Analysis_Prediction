@@ -45,7 +45,7 @@ def analyze_stock(ticker):
     """
     try:
         ticker = ticker.upper().strip()
-        analysis_type = request.args.get('type', 'short')  # 'short' or 'long'
+        analysis_type = request.args.get('type', 'short')  # 'short', 'long', or 'day'
         
         if not ticker or len(ticker) > 10:
             return jsonify({'error': 'Invalid ticker symbol'}), 400
@@ -68,9 +68,15 @@ def analyze_stock(ticker):
         if analysis_type == 'short':
             print("📰 Running short-term analysis (news & momentum focused)...")
             analysis_result = analyzer.analyze_stock_short_term(market_data_df, ticker)
-        else:
+        elif analysis_type == 'long':
             print("🏢 Running long-term analysis (fundamentals & health focused)...")
             analysis_result = analyzer.analyze_stock_long_term(market_data_df, ticker)
+        elif analysis_type in ['day', 'day_trade', 'daytrade']:
+            print("⚡ Running day-trade analysis (intraday/next-session move)...")
+            analysis_result = analyzer.analyze_stock_day_trade(market_data_df, ticker)
+        else:
+            print(f"Unknown analysis type '{analysis_type}', defaulting to short-term")
+            analysis_result = analyzer.analyze_stock_short_term(market_data_df, ticker)
         
         if 'error' in analysis_result:
             return jsonify({'error': analysis_result['error']}), 500
