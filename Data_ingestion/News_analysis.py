@@ -55,8 +55,9 @@ class StockSentimentAnalyzer:
                 sentiments = []
                 keywords_positive = []
                 keywords_negative = []
+                top_headlines = []
                 
-                for article in all_articles['articles'][:50]:  # Analyze top 50
+                for idx, article in enumerate(all_articles['articles'][:50]):  # Analyze top 50
                     title = article.get('title', '')
                     description = article.get('description', '')
                     text = f"{title} {description}".lower()
@@ -71,6 +72,15 @@ class StockSentimentAnalyzer:
                             keywords_positive.extend([w for w in ['growth', 'profit', 'beat', 'surge', 'rally', 'upgrade', 'buy'] if w in text])
                         elif polarity < -0.1:
                             keywords_negative.extend([w for w in ['loss', 'decline', 'miss', 'downgrade', 'sell', 'cut', 'warning'] if w in text])
+
+                        # Capture a few top headlines for reasoning context
+                        if len(top_headlines) < 3:
+                            top_headlines.append({
+                                'title': title[:160] if title else '(no title)',
+                                'source': (article.get('source') or {}).get('name', 'Unknown'),
+                                'url': article.get('url', ''),
+                                'publishedAt': article.get('publishedAt', '')
+                            })
                 
                 if sentiments:
                     avg_sentiment = statistics.mean(sentiments)
@@ -92,7 +102,8 @@ class StockSentimentAnalyzer:
                         'score': round(final_score, 2),
                         'confidence': confidence,
                         'article_count': len(sentiments),
-                        'avg_sentiment': round(avg_sentiment, 3)
+                        'avg_sentiment': round(avg_sentiment, 3),
+                        'top_headlines': top_headlines
                     }
             
             return {'score': 50, 'confidence': 'low', 'article_count': 0}
