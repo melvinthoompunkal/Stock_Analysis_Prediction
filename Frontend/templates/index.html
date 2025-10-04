@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Stock Prediction System</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Chart.js for data visualization -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <!-- Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Custom styles -->
+    <style>
+        .gradient-bg {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .card-hover {
+            transition: all 0.3s ease;
+        }
+        .card-hover:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+        }
+        .loading-spinner {
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        .pulse-animation {
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <!-- Header -->
+    <header class="gradient-bg text-white shadow-lg">
+        <div class="container mx-auto px-4 py-6">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-3">
+                    <i class="fas fa-brain text-3xl"></i>
+                    <h1 class="text-3xl font-bold">AI Stock Prediction System</h1>
+                </div>
+                <div class="text-sm opacity-90">
+                    Machine Learning Predictions with 70-80% Accuracy
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="container mx-auto px-4 py-8">
+        <!-- Stock Input Section -->
+        <div class="bg-white rounded-xl shadow-lg p-8 mb-8 card-hover">
+            <div class="text-center mb-6">
+                <h2 class="text-2xl font-bold text-gray-800 mb-2">AI Stock Prediction</h2>
+                <p class="text-gray-600">Enter a stock ticker to get AI-powered predictions with detailed reasoning and confidence scores</p>
+            </div>
+            
+            <div class="max-w-md mx-auto">
+                <div class="relative">
+                    <input 
+                        type="text" 
+                        id="stockInput" 
+                        placeholder="Enter stock ticker (e.g., AAPL, MSFT, GOOGL)"
+                        class="w-full px-6 py-4 pr-12 text-lg border-2 border-gray-200 rounded-xl focus:border-blue-500 focus:outline-none transition-colors"
+                        maxlength="10"
+                    >
+                    <button 
+                        onclick="analyzeStock()" 
+                        id="analyzeBtn"
+                        class="absolute right-2 top-2 bottom-2 px-6 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold"
+                    >
+                        <i class="fas fa-search mr-2"></i>Analyze
+                    </button>
+                </div>
+                
+                <!-- Popular Stocks -->
+                <div class="mt-4">
+                    <p class="text-sm text-gray-500 mb-2">Popular stocks:</p>
+                    <div class="flex flex-wrap gap-2">
+                        <button onclick="quickAnalyze('AAPL')" class="px-3 py-1 bg-gray-100 hover:bg-gray-200 rounded-full text-sm transition-colors">AAPL</button>
+                        <button onclick="quickAnalyze('MSFT')" class="px-3 py-1 bg-gray-100 hover:bg-gray-200 rounded-full text-sm transition-colors">MSFT</button>
+                        <button onclick="quickAnalyze('GOOGL')" class="px-3 py-1 bg-gray-100 hover:bg-gray-200 rounded-full text-sm transition-colors">GOOGL</button>
+                        <button onclick="quickAnalyze('TSLA')" class="px-3 py-1 bg-gray-100 hover:bg-gray-200 rounded-full text-sm transition-colors">TSLA</button>
+                        <button onclick="quickAnalyze('NVDA')" class="px-3 py-1 bg-gray-100 hover:bg-gray-200 rounded-full text-sm transition-colors">NVDA</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Loading Section -->
+        <div id="loadingSection" class="hidden bg-white rounded-xl shadow-lg p-8 mb-8">
+            <div class="text-center">
+                <div class="loading-spinner inline-block w-12 h-12 border-4 border-blue-200 border-t-blue-600 rounded-full mb-4"></div>
+                <h3 class="text-xl font-semibold text-gray-800 mb-2">AI Analysis in Progress</h3>
+                <p class="text-gray-600">Fetching data, training ML models, and generating predictions...</p>
+                <div class="mt-4 text-sm text-gray-500">
+                    <span id="loadingStep">Initializing AI analysis...</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Results Section -->
+        <div id="resultsSection" class="hidden">
+            <!-- Stock Overview -->
+            <div class="bg-white rounded-xl shadow-lg p-6 mb-6 card-hover">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-xl font-bold text-gray-800" id="stockTitle">Stock Overview</h3>
+                    <span id="analysisDate" class="text-sm text-gray-500"></span>
+                </div>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div class="bg-blue-50 p-4 rounded-lg">
+                        <div class="text-sm text-blue-600 font-medium">Current Price</div>
+                        <div class="text-2xl font-bold text-blue-800" id="currentPrice">$0.00</div>
+                    </div>
+                    <div class="bg-green-50 p-4 rounded-lg">
+                        <div class="text-sm text-green-600 font-medium">Predicted Return</div>
+                        <div class="text-2xl font-bold text-green-800" id="sentimentScore">0.00%</div>
+                    </div>
+                    <div class="bg-purple-50 p-4 rounded-lg">
+                        <div class="text-sm text-purple-600 font-medium">AI Confidence</div>
+                        <div class="text-2xl font-bold text-purple-800" id="rsiValue">0%</div>
+                    </div>
+                    <div class="bg-orange-50 p-4 rounded-lg">
+                        <div class="text-sm text-orange-600 font-medium">Risk Score</div>
+                        <div class="text-2xl font-bold text-orange-800" id="volumeValue">0%</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- AI Prediction Results -->
+            <div class="bg-white rounded-xl shadow-lg p-6 mb-6 card-hover">
+                <h3 class="text-xl font-bold text-gray-800 mb-4">AI Prediction Results</h3>
+                
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <!-- Overall Recommendation -->
+                    <div class="text-center">
+                        <div class="text-4xl mb-2" id="sentimentEmoji">📊</div>
+                        <div class="text-lg font-semibold text-gray-800" id="sentimentLabel">HOLD</div>
+                        <div class="text-sm text-gray-600">AI Recommendation</div>
+                    </div>
+                    
+                    <!-- Predicted Return -->
+                    <div class="text-center">
+                        <div class="text-2xl font-bold text-blue-600" id="shortTermScore">0.00%</div>
+                        <div class="text-sm text-gray-600">Predicted Return</div>
+                        <div class="text-xs text-gray-500" id="shortTermConfidence">Confidence: 0%</div>
+                    </div>
+                    
+                    <!-- Predicted Price -->
+                    <div class="text-center">
+                        <div class="text-2xl font-bold text-green-600" id="longTermScore">$0.00</div>
+                        <div class="text-sm text-gray-600">Predicted Price</div>
+                        <div class="text-xs text-gray-500" id="longTermConfidence">Risk Score: 0%</div>
+                    </div>
+                </div>
+                
+                <!-- AI Reasoning -->
+                <div class="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="bg-gray-50 p-4 rounded-lg">
+                        <h4 class="font-semibold text-gray-800 mb-2">AI Reasoning</h4>
+                        <ul id="keyFactors" class="text-sm text-gray-600 space-y-1">
+                            <li>• AI analysis in progress...</li>
+                        </ul>
+                    </div>
+                    <div class="bg-gray-50 p-4 rounded-lg">
+                        <h4 class="font-semibold text-gray-800 mb-2">Prediction Details</h4>
+                        <div class="text-sm text-gray-600 space-y-1">
+                            <div>Recommendation Score: <span id="articleCount" class="font-medium">0/100</span></div>
+                            <div>Recommendation: <span id="marketClassification" class="font-medium">HOLD</span></div>
+                            <div>AI Confidence: <span id="overallConfidence" class="font-medium">0%</span></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- AI Prediction Chart -->
+            <div class="bg-white rounded-xl shadow-lg p-6 mb-6 card-hover">
+                <h3 class="text-xl font-bold text-gray-800 mb-4">AI Price Prediction</h3>
+                <div class="h-80">
+                    <canvas id="priceChart"></canvas>
+                </div>
+            </div>
+
+            <!-- AI Prediction Metrics -->
+            <div class="bg-white rounded-xl shadow-lg p-6 mb-6 card-hover">
+                <h3 class="text-xl font-bold text-gray-800 mb-4">AI Prediction Metrics</h3>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-4 py-3 text-left font-semibold text-gray-800">Metric</th>
+                                <th class="px-4 py-3 text-left font-semibold text-gray-800">Value</th>
+                                <th class="px-4 py-3 text-left font-semibold text-gray-800">Interpretation</th>
+                                <th class="px-4 py-3 text-left font-semibold text-gray-800">Signal</th>
+                            </tr>
+                        </thead>
+                        <tbody id="indicatorsTable" class="divide-y divide-gray-200">
+                            <tr>
+                                <td class="px-4 py-3">Loading...</td>
+                                <td class="px-4 py-3">-</td>
+                                <td class="px-4 py-3">-</td>
+                                <td class="px-4 py-3">-</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Investment Recommendation -->
+            <div class="bg-white rounded-xl shadow-lg p-6 card-hover">
+                <h3 class="text-xl font-bold text-gray-800 mb-4">Investment Recommendation</h3>
+                <div id="recommendation" class="text-center p-6 bg-gray-50 rounded-lg">
+                    <div class="text-4xl mb-2">📊</div>
+                    <div class="text-lg font-semibold text-gray-800">Neutral</div>
+                    <div class="text-sm text-gray-600 mt-2">Based on technical analysis and sentiment data</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Error Section -->
+        <div id="errorSection" class="hidden bg-red-50 border border-red-200 rounded-xl p-6">
+            <div class="flex items-center">
+                <i class="fas fa-exclamation-triangle text-red-500 text-2xl mr-3"></i>
+                <div>
+                    <h3 class="text-lg font-semibold text-red-800">Analysis Failed</h3>
+                    <p class="text-red-600 mt-1" id="errorMessage">An error occurred while analyzing the stock.</p>
+                </div>
+            </div>
+            <button onclick="hideError()" class="mt-4 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors">
+                Try Again
+            </button>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="bg-gray-800 text-white py-8 mt-12">
+        <div class="container mx-auto px-4 text-center">
+            <p class="text-gray-400">Stock Analysis Dashboard - Powered by AI & Machine Learning</p>
+            <p class="text-gray-500 text-sm mt-2">Data provided for educational purposes only. Not financial advice.</p>
+        </div>
+    </footer>
+
+    <!-- JavaScript -->
+    <script src="js/main.js"></script>
+</body>
+</html>

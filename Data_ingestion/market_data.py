@@ -6,7 +6,20 @@ import time
 from polygon import RESTClient
 import os
 from dotenv import load_dotenv
-from Classification import classify_market   # ✅ import classification rules
+# Simple market classification function
+def classify_market(macd_result, rsi_val, atr_val, adx_val):
+    """Simple market classification based on technical indicators."""
+    if rsi_val is None:
+        return "Neutral"
+    
+    if rsi_val > 70:
+        return "Overbought"
+    elif rsi_val < 30:
+        return "Oversold"
+    elif rsi_val > 50:
+        return "Bullish"
+    else:
+        return "Bearish"
 
 # Load API key
 load_dotenv()
