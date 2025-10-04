@@ -322,6 +322,13 @@ function selectReasoningTab(tab) {
             tabNonTechnical.className = 'px-3 py-1 rounded bg-blue-100 text-blue-700';
         }
     }
+    if (lastAnalysisData) {
+        updateAIReasoning(
+            lastAnalysisData.reasoning,
+            lastAnalysisData.reasoning_tabs,
+            lastAnalysisData.reasoning_charts
+        );
+    }
 }
 
 function updateAIReasoning(reasoning, reasoningTabs, charts) {
